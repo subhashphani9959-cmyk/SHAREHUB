@@ -1,12 +1,15 @@
 {
-  "name": "shareh hub",
+  "name": "shareh-hub",
   "version": "1.0.0",
   "description": "A modern, privacy-focused file sharing web application for sharing files and applications between devices instantly",
-  "main": "index.html",
+  "main": "server.js",
+  "engines": {
+    "node": "18.x"
+  },
   "scripts": {
-    "start": "python -m http.server 8000",
-    "start:node": "npx http-server -p 8000",
-    "deploy": "echo 'Ready for deployment to Netlify, Vercel, or GitHub Pages'"
+    "build": "echo 'Static site - no build needed'",
+    "start": "node server.js",
+    "dev": "node server.js"
   },
   "keywords": [
     "file-sharing",
