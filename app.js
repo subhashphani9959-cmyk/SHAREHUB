@@ -7,10 +7,126 @@ class ShareHub {
         this.shareCode = this.generateShareCode();
         this.maxStorageMB = 100; // 100 MB limit
         this.connectedDevices = this.loadDevices();
+        this.syncEnabled = true;
+        this.syncInterval = null;
         
         this.initializeEventListeners();
         this.updateUI();
         this.generateQRCode();
+        this.startSync();
+        this.checkForIncomingShares();
+    }
+
+    // Start real-time sync
+    startSync() {
+        // Check for synced files every 2 seconds
+        this.syncInterval = setInterval(() => {
+            this.syncFilesWithConnectedDevices();
+        }, 2000);
+    }
+
+    // Sync files with connected devices using LocalStorage Bridge
+    syncFilesWithConnectedDevices() {
+        // Store current device's files in a sharable location
+        const shareKey = `shareh_files_${this.shareCode}`;
+        const filesData = {
+            deviceId: this.deviceId,
+            shareCode: this.shareCode,
+            files: this.files.map(f => ({
+                id: f.id,
+                name: f.name,
+                size: f.size,
+                type: f.type,
+                uploadDate: f.uploadDate,
+                uploadedFrom: f.uploadedFrom,
+                data: this.arrayBufferToBase64(f.data)
+            })),
+            timestamp: new Date().getTime(),
+            deviceName: this.getDeviceName()
+        };
+        
+        // Store with timestamp
+        sessionStorage.setItem(shareKey, JSON.stringify(filesData));
+    }
+
+    // Check for incoming shares from connected devices
+    checkForIncomingShares() {
+        // Periodically check for files from other devices
+        setInterval(() => {
+            if (this.connectedDevices.length === 0) return;
+
+            this.connectedDevices.forEach(device => {
+                const incomingKey = `shareh_files_${device.shareCode}`;
+                const incomingData = sessionStorage.getItem(incomingKey);
+                
+                if (incomingData) {
+                    try {
+                        const remoteFiles = JSON.parse(incomingData);
+                        if (remoteFiles.deviceId !== this.deviceId) {
+                            this.mergeRemoteFiles(remoteFiles, device);
+                        }
+                    } catch (e) {
+                        // Silent fail
+                    }
+                }
+            });
+        }, 2000);
+    }
+
+    // Merge remote files from connected device
+    mergeRemoteFiles(remoteData, device) {
+        let newFilesAdded = 0;
+        
+        remoteData.files.forEach(remoteFile => {
+            // Check if file already exists
+            if (!this.files.some(f => f.id === remoteFile.id)) {
+                const newFile = {
+                    id: remoteFile.id,
+                    name: remoteFile.name,
+                    size: remoteFile.size,
+                    type: remoteFile.type,
+                    uploadDate: remoteFile.uploadDate,
+                    uploadedFrom: remoteFile.uploadedFrom,
+                    data: this.base64ToArrayBuffer(remoteFile.data),
+                    receivedFrom: device.name || 'Connected Device'
+                };
+                
+                this.files.push(newFile);
+                newFilesAdded++;
+            }
+        });
+
+        if (newFilesAdded > 0) {
+            this.saveFiles();
+            this.updateUI();
+            this.updateSyncStatus('Synced!', true);
+            this.showNotification(`✅ ${newFilesAdded} new file(s) from ${device.name || 'device'}!`, 'success');
+        }
+    }
+
+    // Update sync status indicator
+    updateSyncStatus(text, isActive) {
+        const status = document.getElementById('syncStatus');
+        if (status) {
+            status.textContent = text;
+            if (isActive) {
+                status.classList.add('active');
+            } else {
+                status.classList.remove('active');
+            }
+        }
+    }
+
+    // Get device name based on user agent
+    getDeviceName() {
+        const ua = navigator.userAgent;
+        if (ua.includes('iPhone')) return '📱 iPhone';
+        if (ua.includes('iPad')) return '📱 iPad';
+        if (ua.includes('Android')) return '📱 Android';
+        if (ua.includes('Windows')) return '💻 Windows';
+        if (ua.includes('Mac')) return '🍎 Mac';
+        if (ua.includes('Linux')) return '🐧 Linux';
+        return '💻 Device';
     }
 
     // Generate unique device ID
@@ -77,10 +193,31 @@ class ShareHub {
             this.downloadQRCode();
         });
 
+        // QR Scanner buttons
+        document.getElementById('startScannerBtn').addEventListener('click', () => {
+            this.startQRScanner();
+        });
+
+        document.getElementById('uploadQRBtn').addEventListener('click', () => {
+            document.getElementById('qrImageInput').click();
+        });
+
+        document.getElementById('qrImageInput').addEventListener('change', (e) => {
+            this.scanQRFromImage(e.target.files[0]);
+        });
+
         // Add device button
         document.getElementById('addDeviceBtn').addEventListener('click', () => {
             this.showAddDeviceDialog();
         });
+
+        // Refresh devices button
+        if (document.getElementById('refreshDevicesBtn')) {
+            document.getElementById('refreshDevicesBtn').addEventListener('click', () => {
+                this.updateDevicesList();
+                this.showNotification('Device list refreshed', 'success');
+            });
+        }
 
         // Clear storage
         document.getElementById('clearStorageBtn').addEventListener('click', () => {
@@ -225,18 +362,21 @@ class ShareHub {
             return;
         }
 
-        filesList.innerHTML = this.files.map(file => `
-            <div class="file-item">
-                <div class="file-info">
-                    <div class="file-name">📄 ${this.escapeHtml(file.name)}</div>
-                    <div class="file-size">${this.formatFileSize(file.size)} • Uploaded ${file.uploadDate}</div>
+        filesList.innerHTML = this.files.map(file => {
+            const sourceInfo = file.receivedFrom ? ` (from ${file.receivedFrom})` : '';
+            return `
+                <div class="file-item">
+                    <div class="file-info">
+                        <div class="file-name">📄 ${this.escapeHtml(file.name)}</div>
+                        <div class="file-size">${this.formatFileSize(file.size)} • ${file.uploadDate}${sourceInfo}</div>
+                    </div>
+                    <div class="file-actions">
+                        <button class="btn-download" onclick="shareHub.downloadFile('${file.id}')">⬇️ Download</button>
+                        <button class="btn-delete" onclick="shareHub.deleteFile('${file.id}')">🗑️ Delete</button>
+                    </div>
                 </div>
-                <div class="file-actions">
-                    <button class="btn-download" onclick="shareHub.downloadFile('${file.id}')">⬇️ Download</button>
-                    <button class="btn-delete" onclick="shareHub.deleteFile('${file.id}')">🗑️ Delete</button>
-                </div>
-            </div>
-        `).join('');
+            `;
+        }).join('');
     }
 
     // Update stats display
@@ -427,29 +567,280 @@ class ShareHub {
         this.showNotification('QR code downloaded', 'success');
     }
 
-    // Show add device dialog
-    showAddDeviceDialog() {
-        const code = prompt('Enter the share code from the other device:');
-        if (!code) return;
+    // Start QR Code Scanner from camera
+    startQRScanner() {
+        const video = document.getElementById('qrScanner');
+        const btn = document.getElementById('startScannerBtn');
+        
+        if (video.style.display === 'none') {
+            btn.textContent = '⏹️ Stop Camera';
+            video.style.display = 'block';
+            
+            navigator.mediaDevices.getUserMedia({ 
+                video: { facingMode: 'environment' } 
+            }).then(stream => {
+                video.srcObject = stream;
+                video.play();
+                this.scanQRFromVideo(video);
+            }).catch(err => {
+                this.showNotification('Cannot access camera: ' + err.message, 'error');
+                btn.textContent = '📷 Start Camera Scan';
+                video.style.display = 'none';
+            });
+        } else {
+            btn.textContent = '📷 Start Camera Scan';
+            video.style.display = 'none';
+            if (video.srcObject) {
+                video.srcObject.getTracks().forEach(track => track.stop());
+            }
+        }
+    }
 
-        const device = {
-            id: code,
-            name: `Device ${this.connectedDevices.length + 1}`,
-            shareCode: code,
-            addedDate: new Date().toLocaleString(),
-            lastSeen: new Date().toLocaleString()
+    // Scan QR from video stream
+    scanQRFromVideo(video) {
+        const canvas = document.getElementById('qrCanvas');
+        const context = canvas.getContext('2d');
+        let scanning = true;
+
+        const scanFrame = () => {
+            if (!scanning) return;
+
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            context.drawImage(video, 0, 0);
+
+            const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
+            const code = this.decodeQRCode(imageData);
+
+            if (code) {
+                scanning = false;
+                this.handleScannedQRCode(code);
+                video.style.display = 'none';
+                document.getElementById('startScannerBtn').textContent = '📷 Start Camera Scan';
+                if (video.srcObject) {
+                    video.srcObject.getTracks().forEach(track => track.stop());
+                }
+            } else {
+                requestAnimationFrame(scanFrame);
+            }
         };
 
-        // Check if device already exists
-        if (this.connectedDevices.some(d => d.id === device.id)) {
-            this.showNotification('Device already connected', 'error');
+        scanFrame();
+    }
+
+    // Scan QR from uploaded image
+    scanQRFromImage(file) {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            const img = new Image();
+            img.onload = () => {
+                const canvas = document.getElementById('qrCanvas');
+                const context = canvas.getContext('2d');
+                canvas.width = img.width;
+                canvas.height = img.height;
+                context.drawImage(img, 0, 0);
+
+                const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
+                const code = this.decodeQRCode(imageData);
+
+                if (code) {
+                    this.handleScannedQRCode(code);
+                } else {
+                    this.showNotification('No valid QR code found in image', 'error');
+                }
+            };
+            img.src = e.target.result;
+        };
+        reader.readAsDataURL(file);
+    }
+
+    // Simple QR code decoder using jsQR
+    decodeQRCode(imageData) {
+        if (typeof jsQR === 'undefined') {
+            return null;
+        }
+        
+        try {
+            const code = jsQR(imageData.data, imageData.width, imageData.height);
+            return code ? code.data : null;
+        } catch (e) {
+            return null;
+        }
+    }
+
+    // Handle scanned QR code
+    handleScannedQRCode(codeData) {
+        try {
+            const data = JSON.parse(codeData);
+            if (data.shareCode && data.deviceId) {
+                // Auto-connect with scanned share code
+                const deviceName = data.name || 'Scanned Device';
+                this.connectToDevice(data.shareCode, deviceName);
+            }
+        } catch (e) {
+            // If it's just a share code string
+            this.connectToDevice(codeData, 'Scanned Device');
+        }
+    }
+
+    // Connect to device with share code
+    connectToDevice(shareCode, deviceName) {
+        shareCode = shareCode.trim().toUpperCase();
+
+        if (!shareCode || shareCode.length < 6) {
+            this.showNotification('Invalid share code', 'error');
             return;
         }
+
+        if (shareCode === this.shareCode) {
+            this.showNotification('Cannot connect to your own device!', 'error');
+            return;
+        }
+
+        // Check if already connected
+        if (this.connectedDevices.some(d => d.shareCode === shareCode)) {
+            this.showNotification('Already connected to this device!', 'error');
+            return;
+        }
+
+        const device = {
+            id: 'DEV-' + Math.random().toString(36).substr(2, 9),
+            name: deviceName,
+            shareCode: shareCode,
+            addedDate: new Date().toLocaleString(),
+            lastSeen: new Date().toLocaleString(),
+            connected: true
+        };
 
         this.connectedDevices.push(device);
         this.saveDevices();
         this.updateUI();
-        this.showNotification('✅ Device connected successfully!', 'success');
+        this.showNotification(`✅ Connected to ${deviceName}! Files will sync automatically.`, 'success');
+    }
+
+    // Show add device dialog
+    showAddDeviceDialog() {
+        // Create modal dialog
+        const modal = document.createElement('div');
+        modal.style.cssText = `
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0,0,0,0.7);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 2000;
+        `;
+
+        const content = document.createElement('div');
+        content.style.cssText = `
+            background: white;
+            padding: 30px;
+            border-radius: 15px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.3);
+            max-width: 400px;
+            width: 90%;
+        `;
+
+        content.innerHTML = `
+            <h3 style="color: #667eea; margin-bottom: 20px; text-align: center;">Connect Device</h3>
+            
+            <div style="margin-bottom: 20px;">
+                <label style="display: block; margin-bottom: 10px; font-weight: 600; color: #333;">
+                    Enter Share Code from Other Device:
+                </label>
+                <input type="text" id="shareCodeInput" placeholder="e.g., ABC12345" 
+                    style="width: 100%; padding: 12px; border: 2px solid #667eea; border-radius: 8px; 
+                    font-size: 16px; text-transform: uppercase;" />
+            </div>
+
+            <div style="margin-bottom: 20px;">
+                <label style="display: block; margin-bottom: 10px; font-weight: 600; color: #333;">
+                    Device Name (Optional):
+                </label>
+                <input type="text" id="deviceNameInput" placeholder="e.g., My Phone" 
+                    style="width: 100%; padding: 12px; border: 2px solid #667eea; border-radius: 8px; 
+                    font-size: 16px;" />
+            </div>
+
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+                <button id="connectBtn" style="
+                    padding: 12px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                    color: white; border: none; border-radius: 8px; font-weight: 600; cursor: pointer;
+                ">Connect</button>
+                <button id="cancelBtn" style="
+                    padding: 12px; background: #f0f2ff; color: #667eea; border: 2px solid #667eea; 
+                    border-radius: 8px; font-weight: 600; cursor: pointer;
+                ">Cancel</button>
+            </div>
+
+            <div style="margin-top: 20px; padding: 15px; background: #f0f2ff; border-radius: 8px; 
+                border-left: 4px solid #667eea; font-size: 0.9em; color: #666;">
+                <strong>How to connect:</strong>
+                <ol style="margin: 10px 0 0 20px;">
+                    <li>Open ShareHub on another device</li>
+                    <li>Go to "My Devices" tab</li>
+                    <li>Find the Share Code (8-character code)</li>
+                    <li>Paste it here and click Connect</li>
+                    <li>Files will sync automatically!</li>
+                </ol>
+            </div>
+        `;
+
+        modal.appendChild(content);
+        document.body.appendChild(modal);
+
+        // Event listeners
+        document.getElementById('connectBtn').addEventListener('click', () => {
+            const shareCode = document.getElementById('shareCodeInput').value.trim().toUpperCase();
+            const deviceName = document.getElementById('deviceNameInput').value.trim() || `Device ${this.connectedDevices.length + 1}`;
+
+            if (!shareCode || shareCode.length < 6) {
+                this.showNotification('Please enter a valid share code (at least 6 characters)', 'error');
+                return;
+            }
+
+            if (shareCode === this.shareCode) {
+                this.showNotification('Cannot connect to your own device!', 'error');
+                return;
+            }
+
+            const device = {
+                id: 'DEV-' + Math.random().toString(36).substr(2, 9),
+                name: deviceName,
+                shareCode: shareCode,
+                addedDate: new Date().toLocaleString(),
+                lastSeen: new Date().toLocaleString(),
+                connected: true
+            };
+
+            // Check if device already connected
+            if (this.connectedDevices.some(d => d.shareCode === shareCode)) {
+                this.showNotification('This device is already connected!', 'error');
+                return;
+            }
+
+            this.connectedDevices.push(device);
+            this.saveDevices();
+            this.updateUI();
+            this.showNotification(`✅ Connected to ${deviceName}! Files will sync automatically.`, 'success');
+            
+            document.body.removeChild(modal);
+        });
+
+        document.getElementById('cancelBtn').addEventListener('click', () => {
+            document.body.removeChild(modal);
+        });
+
+        // Allow Enter key to submit
+        document.getElementById('shareCodeInput').addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                document.getElementById('connectBtn').click();
+            }
+        });
     }
 
     // Switch tabs
