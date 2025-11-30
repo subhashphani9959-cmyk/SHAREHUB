@@ -1,0 +1,24 @@
+{
+  "name": "shareh hub",
+  "version": "1.0.0",
+  "description": "A modern, privacy-focused file sharing web application for sharing files and applications between devices instantly",
+  "main": "index.html",
+  "scripts": {
+    "start": "python -m http.server 8000",
+    "start:node": "npx http-server -p 8000",
+    "deploy": "echo 'Ready for deployment to Netlify, Vercel, or GitHub Pages'"
+  },
+  "keywords": [
+    "file-sharing",
+    "web-app",
+    "sharing",
+    "device-sync",
+    "privacy"
+  ],
+  "author": "Your Name",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yourusername/shareh-hub"
+  }
+}
